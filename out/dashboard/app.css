@@ -1,4 +1,4 @@
-/* Token Radar v2 theme. Palette: deep green ink on warm paper, one accent, one
+/* Token Radar v3 theme. Palette: deep green ink on warm paper, one accent, one
    warning, one danger. Spacing comes from a single 4px step scale. */
 :root {
   --canvas: #f4f6f1;
@@ -84,6 +84,10 @@ tbody tr[data-selected="true"] { background: var(--accent-soft); }
 .formula { font-family: var(--font-num); font-size: 13px; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-control); padding: var(--s3) var(--s4); }
 .note { font-size: 13px; color: var(--muted); }
 .note b { color: var(--ink); }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); font-size: 13px; color: var(--muted); }
+.checks li { display: flex; gap: var(--s2); align-items: baseline; }
+.checks b { color: var(--ink); }
+.check-mark { font-family: var(--font-num); color: var(--accent); font-weight: 700; flex: none; }
 .empty { padding: var(--s7) var(--s5); text-align: center; display: grid; gap: var(--s3); justify-items: center; }
 .empty p { color: var(--muted); }
 .button { min-height: 36px; padding: 0 var(--s4); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
