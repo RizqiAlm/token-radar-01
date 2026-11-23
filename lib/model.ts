@@ -1,4 +1,4 @@
-// Token Radar v2 ("radar-2"): one snapshot of the protocol universe in, one ranked board out.
+// Token Radar v3 ("radar-3"): one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // pre-token protocols below the watchlist floor that pass the watchlist's own exclusion rules in
@@ -8,35 +8,58 @@
 //
 // The value model is fitted, not asserted. On the 128 traded comps (mcap_usd > 0) the log-log
 // fit is log(mcap) = 6.9646 + 0.5223 * log(tvl), R2 0.194, residual SD 2.09 in log space.
-// Every extra term was tested and dropped because it made held-out error worse:
-//   logTVL only            LOO RMSE 2.107, walk-forward RMSE 2.439
-//   + growth (7d, clamped) LOO RMSE 2.115, walk-forward RMSE 2.443
-//   + growth + log age     LOO RMSE 2.135, walk-forward RMSE 2.505
-//   + chains, logTVL^2     LOO RMSE 2.127-2.152, walk-forward RMSE 2.546-2.614
-//   + shrunk category mean 5-fold CV RMSE 2.121, identical to logTVL only (2.121)
-// Walk-forward trains on the oldest 70% by listed_at (89 comps) and tests the newest 30% (39);
-// its baseline (train mean) is 2.728, so TVL alone beats the mean but only modestly. The model
-// is weak and the dashboard says so: every implied value carries its 80% interval from the
-// leave-one-out residuals (10th pct -2.783, 90th pct +2.155 in log space, i.e. 0.06x to 8.63x).
+// It is weak and the dashboard says so: the typical miss is 3.40x (median of exp(|LOO
+// residual|)), so every implied value carries an 80% interval, not just a point.
+// Every extra term was tested on held-out data and dropped because it made held-out error
+// worse (LOO RMSE / 5-fold CV / walk-forward 70-30, in log space; baseline mean = 2.728):
+//   logTVL only                    LOO 2.107, CV 2.117, WF 2.439   <-- kept
+//   + growth (7d, clamped)         LOO 2.115, CV 2.123, WF 2.443
+//   + growth + log age             LOO 2.135, CV 2.143, WF 2.505
+//   + chains, logTVL^2             LOO 2.127-2.152, CV 2.134-2.165, WF 2.535-2.614
+//   + growth^2, |growth|, lt*age   LOO 2.147-2.198, WF 2.505-2.731
+//   + shrunk category mean         5-fold CV 2.152-2.211 vs 2.143 without it (k = 20..2)
+//   ridge on 12 wide features      CV 2.194-2.353, WF 2.524-2.650
+//   Huber / LAD (median) fit       CV 2.119-2.121, median |err| no better than OLS
+// Walk-forward uses only the 95 comps with a listed_at (the 33 without one have no time
+// to walk forward on; v1's split sorted them last, putting them all in the test set and
+// reporting 2.439). Clean splits: oldest 70% dated -> newest 30% dated, RMSE 2.305
+// (median miss 3.41x); 80/20, RMSE 2.577; train listed before 2024, test 2024 and later,
+// RMSE 2.058 (median miss 2.91x); the mean baseline is 2.728. A 2000-resample bootstrap
+// of the comps puts the slope at 0.52 with an 80% interval of [0.41, 0.64] and the
+// intercept at 6.99 [4.93, 9.09].
+// The intervals are conformal per TVL tercile of the comps (cuts at $12.2M and $79.4M TVL):
+// the middle tercile's 80% interval is narrower (0.16x-8.45x) than the outer terciles'
+// (0.04x-6.82x and 0.06x-9.62x), instead of one global 0.06x-8.63x for every row.
+// Rank ranges come from a 200-resample bootstrap of the comps (seeded, deterministic):
+// each row's rank is recomputed under every refit, and the board shows the 10th-90th
+// percentile rank range, so a rank of 1 that is really 1-6 does not pretend to be exact.
 //
 // Token odds come from a second fitted model, a logistic regression on all 758 protocols with
-// traded = symbol is not null (416 traded, 342 pre-token). Features are log TVL, log age and
-// 7-day growth; fitted (ridge lambda 1.0): intercept -3.5247, logTVL 0.0413, logAge 0.4597,
-// growth -0.0196. In-sample AUC 0.645, log-loss 0.656, LOO log-loss 0.661 against a base-rate
-// log-loss of 0.688: the odds discriminate, weakly. The cross-sectional fit says older
-// protocols are more often traded (age 0-180d: 26% traded; 1095d+: 79%), but that is exposure
-// time, not launch propensity: a protocol that is still pre-token at an old age is a survivor,
-// and survivors are increasingly drawn from protocols that never launch. So the odds applied
-// to a pre-token row are the cross-sectional probability discounted by the share still
-// untraded at its age, token_odds = p_cross * (1 - F_age), where F_age is an age-only
-// logistic fit (intercept -3.0397, logAge 0.5201). At $100M TVL and 0% growth the adjusted
-// odds are 0.18 at 30 days, 0.24 at 1 year, 0.21 at 1500 days and 0.18 at 3000 days: roughly
-// flat, gently falling for the oldest survivors, never a claim that old survivors are the
-// most likely to launch.
+// traded = symbol is not null (416 traded, 342 pre-token). v3 adds a quadratic age term,
+// which is the one change that improved held-out odds (5-fold CV log-loss 0.652 vs 0.660,
+// CV AUC 0.642 vs 0.637, LOO log-loss 0.653 vs 0.661, base rate 0.688). Fitted (ridge
+// lambda 1.0): intercept -1.5490, logTVL 0.0420, logAge -0.4096, growth -0.0180,
+// logAge^2 0.0866. An interaction term (logTVL x logAge) scored a little better in CV
+// (0.645) but was dropped: its coefficients extrapolate wildly outside the comps' range.
+// Ages under 90 days are scored as 90 days: only 2 of the 128 comps are younger than
+// 90 days, so the fit cannot say anything about newborn protocols, and without the floor
+// the quadratic would give a 2-day-old protocol a 58% token odds.
+// The cross-sectional fit says older protocols are more often traded (age 0-180d: 26%
+// traded; 1095d+: 79%), but that is exposure time, not launch propensity: a protocol
+// that is still pre-token at an old age is a survivor, and survivors are increasingly
+// drawn from protocols that never launch. So the odds applied to a pre-token row are the
+// cross-sectional probability discounted by the share still untraded at its age,
+// token_odds = p_cross * (1 - F_age), where F_age is an age-only logistic fit
+// (intercept -4.1398, logAge 0.6924, also floored at 90 days). At $100M TVL and 0%
+// growth the adjusted odds are 0.22 at 30 days, 0.23 at 1 year, 0.20 at 1500 days and
+// 0.16 at 3000 days: roughly flat, falling for the oldest survivors, never a claim that
+// old survivors are the most likely to launch.
 //
 // Implied expected value = exp(predicted log mcap) * token_odds, with the 80% interval
-// [exp(pred + q10) * odds, exp(pred + q90) * odds]. No protocol name is ever special-cased:
-// the same functions score every row.
+// [exp(pred + q10_tercile) * odds, exp(pred + q90_tercile) * odds]. Growth and age enter
+// the expected value through the token odds (and age sets the farm hold); the launch value
+// itself comes from TVL alone because no other term survived held-out testing. No protocol
+// name is ever special-cased: the same functions score every row.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -67,21 +90,39 @@ export interface ModelConstants {
   log_slope: number;
   resid_sd: number;
   loo_rmse: number;
+  loo_med_abs: number;
+  loo_med_mult: number;
   walkforward_rmse: number;
+  walkforward80_rmse: number;
+  walkforward2024_rmse: number;
+  walkforward_med_mult: number;
   walkforward_baseline: number;
   loo_q10: number;
   loo_q90: number;
   r2: number;
   n_comps: number;
+  slope_lo80: number;
+  slope_hi80: number;
+  /** TVL tercile cuts (log TVL) of the comps, for the conformal intervals. */
+  tercile_cut1: number;
+  tercile_cut2: number;
+  /** 80% conformal interval (log space) per TVL tercile: [q10, q90]. */
+  tercile_q10: [number, number, number];
+  tercile_q90: [number, number, number];
   odds_intercept: number;
   odds_log_tvl: number;
   odds_log_age: number;
   odds_growth: number;
+  odds_log_age_sq: number;
   odds_age_intercept: number;
   odds_age_log_age: number;
   odds_auc: number;
+  odds_cv_auc: number;
   odds_loo_logloss: number;
   odds_baseline_logloss: number;
+  odds_brier: number;
+  odds_brier_cv: number;
+  odds_brier_baseline: number;
   /** Assumed airdrop pool as a share of expected implied value (an assumption, stated). */
   airdrop_pool_pct: number;
   /** Assumed eligible wallets splitting that pool (an assumption, stated). */
@@ -93,27 +134,43 @@ export const MODEL: ModelConstants = {
   log_slope: 0.5223,
   resid_sd: 2.09,
   loo_rmse: 2.107,
-  walkforward_rmse: 2.439,
+  loo_med_abs: 1.223,
+  loo_med_mult: 3.399,
+  walkforward_rmse: 2.305,
+  walkforward80_rmse: 2.577,
+  walkforward2024_rmse: 2.058,
+  walkforward_med_mult: 3.41,
   walkforward_baseline: 2.728,
   loo_q10: -2.7825,
   loo_q90: 2.1551,
   r2: 0.194,
   n_comps: 128,
-  odds_intercept: -3.5247,
-  odds_log_tvl: 0.0413,
-  odds_log_age: 0.4597,
-  odds_growth: -0.0196,
-  odds_age_intercept: -3.0397,
-  odds_age_log_age: 0.5201,
-  odds_auc: 0.645,
-  odds_loo_logloss: 0.661,
+  slope_lo80: 0.406,
+  slope_hi80: 0.635,
+  tercile_cut1: 16.3174,
+  tercile_cut2: 18.1905,
+  tercile_q10: [-3.2677, -1.8188, -2.8553],
+  tercile_q90: [1.9197, 2.1342, 2.2633],
+  odds_intercept: -1.549,
+  odds_log_tvl: 0.042,
+  odds_log_age: -0.4096,
+  odds_growth: -0.018,
+  odds_log_age_sq: 0.0866,
+  odds_age_intercept: -4.1398,
+  odds_age_log_age: 0.6924,
+  odds_auc: 0.649,
+  odds_cv_auc: 0.642,
+  odds_loo_logloss: 0.653,
   odds_baseline_logloss: 0.688,
+  odds_brier: 0.228,
+  odds_brier_cv: 0.23,
+  odds_brier_baseline: 0.248,
   airdrop_pool_pct: 0.05,
   airdrop_wallets: 5000,
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** The cap on early rows below the watchlist floor. The snapshot holds 138 eligible ones. */
 export const EARLY_ROWS = 160;
@@ -138,6 +195,7 @@ export interface FarmEconomics {
   total_hours: number;
   hold_days: number;
   expected_airdrop_usd: number;
+  net_usd: number;
   usd_per_hour: number;
   break_even_airdrop_usd: number;
   verdict: 'FARM' | 'THIN' | 'SKIP';
@@ -163,6 +221,9 @@ export interface BoardRow {
   token_odds: number;
   implied_lo_usd: number;
   implied_hi_usd: number;
+  /** 10th-90th percentile rank over 200 bootstrap refits of the comps (seeded). */
+  rank_lo: number;
+  rank_hi: number;
   model: {
     log_tvl: number;
     pred_log_mcap: number;
@@ -190,6 +251,8 @@ export interface RadarRow {
   token_odds: number;
   implied_lo_usd: number;
   implied_hi_usd: number;
+  rank_lo: number;
+  rank_hi: number;
   growth_pct: number;
   farm: FarmEconomics;
   farm_steps: string[];
@@ -224,6 +287,22 @@ export interface RadarData {
     rankable: number;
     excluded: number;
     comps_mcap: number;
+    /** Pre-token protocols excluded, by first exclusion reason. */
+    excluded_by_category: number;
+    excluded_by_versioned: number;
+    excluded_by_wrapped: number;
+    excluded_by_exchange: number;
+    /** Rankable protocols at/above the floor the watchlist leaves out (parentage is not
+        provable from the snapshot's ten fields, so they are counted, not ranked). */
+    above_floor_not_watchlist: number;
+  };
+  farm_counts: { FARM: number; THIN: number; SKIP: number };
+  bootstrap: {
+    resamples: number;
+    slope_lo80: number;
+    slope_hi80: number;
+    intercept_lo80: number;
+    intercept_hi80: number;
   };
   rows: RadarRow[];
   live: LiveRow[];
@@ -258,6 +337,14 @@ function logAge(age: number | null): number {
   return Math.log1p(age ?? 365);
 }
 
+/**
+ * log(1 + age) for the token-odds fit, floored at 90 days: only 2 of the 128 comps are
+ * younger than 90 days, so the quadratic age term is not trusted below that.
+ */
+function logAgeForOdds(age: number | null): number {
+  return Math.log1p(Math.max(age ?? 365, 90));
+}
+
 /** The fitted log market cap for a TVL, and the launch (median) value in dollars. */
 export function launchValue(tvlUsd: number, model: ModelConstants): { predLog: number; launch: number } {
   const predLog = model.log_intercept + model.log_slope * Math.log(Math.max(1, tvlUsd));
@@ -279,15 +366,25 @@ function sigmoid(z: number): number {
 export function tokenOdds(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): number {
   const age = ageDays(asOf, protocol.listed_at);
   const growth = Math.min(120, Math.max(-60, finite(protocol.change_7d, 0)));
+  const la = logAgeForOdds(age);
   const logit =
     model.odds_intercept +
     model.odds_log_tvl * Math.log(Math.max(1, protocol.tvl_usd)) +
-    model.odds_log_age * logAge(age) +
-    model.odds_growth * growth;
+    model.odds_log_age * la +
+    model.odds_growth * growth +
+    model.odds_log_age_sq * la * la;
   const pCross = sigmoid(logit);
-  const fAge = sigmoid(model.odds_age_intercept + model.odds_age_log_age * logAge(age));
+  const fAge = sigmoid(model.odds_age_intercept + model.odds_age_log_age * la);
   const odds = pCross * (1 - fAge);
   return Math.min(0.6, Math.max(0.01, odds));
+}
+
+/** Which TVL tercile of the comps a TVL falls in (0 low, 1 middle, 2 high). */
+export function tvlTercile(tvlUsd: number, model: ModelConstants): number {
+  const lt = Math.log(Math.max(1, tvlUsd));
+  if (lt < model.tercile_cut1) return 0;
+  if (lt < model.tercile_cut2) return 1;
+  return 2;
 }
 
 /** The implied expected value and its 80% interval for one protocol. */
@@ -301,8 +398,9 @@ export function impliedValue(
   const { predLog, launch } = launchValue(protocol.tvl_usd, model);
   const odds = tokenOdds(protocol, asOf, model);
   const implied = Math.max(1, Math.round(launch * odds));
-  const lo = Math.max(1, Math.round(Math.exp(predLog + model.loo_q10) * odds));
-  const hi = Math.max(lo + 1, Math.round(Math.exp(predLog + model.loo_q90) * odds));
+  const tercile = tvlTercile(protocol.tvl_usd, model);
+  const lo = Math.max(1, Math.round(Math.exp(predLog + model.tercile_q10[tercile]!) * odds));
+  const hi = Math.max(lo + 1, Math.round(Math.exp(predLog + model.tercile_q90[tercile]!) * odds));
   return { implied, launch: Math.round(launch), odds, lo, hi, predLog, growthPct, age };
 }
 
@@ -417,7 +515,7 @@ function money(n: number): string {
  * capital is deployed and comes back when the position unwinds, so it is shown as capital
  * at risk, not spent. Expected airdrop per wallet is an ASSUMPTION, stated on the
  * dashboard: the airdrop pool is 5% of the row's expected implied value, split across
- * 20,000 eligible wallets. Nothing about the pool size or the wallet count is measured;
+ * 5,000 eligible wallets. Nothing about the pool size or the wallet count is measured;
  * the verdict follows from that assumption, and the dashboard says so.
  * Verdict: FARM when expected pay is at least $5 an active hour, THIN when it covers
  * gas but pays less, SKIP when it does not cover gas.
@@ -432,7 +530,8 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
   const gas = Math.round(gasTx * txCount * 100) / 100;
   const totalHours = Math.round((0.5 + weeks * (10 / 60) + 0.5) * 100) / 100;
   const expectedAirdrop = Math.round(implied * model.airdrop_pool_pct / model.airdrop_wallets * 100) / 100;
-  const usdPerHour = Math.round(((expectedAirdrop - gas) / totalHours) * 100) / 100;
+  const net = Math.round((expectedAirdrop - gas) * 100) / 100;
+  const usdPerHour = Math.round((net / totalHours) * 100) / 100;
   const verdict: FarmEconomics['verdict'] = usdPerHour >= 5 ? 'FARM' : expectedAirdrop >= gas ? 'THIN' : 'SKIP';
   return {
     capital_usd: capital,
@@ -443,6 +542,7 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
     total_hours: totalHours,
     hold_days: hold,
     expected_airdrop_usd: expectedAirdrop,
+    net_usd: net,
     usd_per_hour: usdPerHour,
     break_even_airdrop_usd: gas,
     verdict,
@@ -494,6 +594,94 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, econ: FarmEco
   ];
 }
 
+/** A small deterministic PRNG (mulberry32) so bootstrap refits are byte-identical run to run. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Closed-form OLS for log(mcap) on log(TVL) over a list of (logTVL, logMcap) points. */
+function olsLogLog(points: Array<[number, number]>): { intercept: number; slope: number } {
+  const n = points.length;
+  let sx = 0;
+  let sy = 0;
+  let sxx = 0;
+  let sxy = 0;
+  for (const [x, y] of points) {
+    sx += x;
+    sy += y;
+    sxx += x * x;
+    sxy += x * y;
+  }
+  const denom = n * sxx - sx * sx;
+  const slope = denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
+  const intercept = (sy - slope * sx) / n;
+  return { intercept, slope };
+}
+
+/** Percentile by nearest rank (p in [0,1]) of a sorted array. */
+function quantileSorted(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.floor(p * sorted.length)));
+  return sorted[i]!;
+}
+
+/**
+ * Rank ranges from bootstrap refits of the value model. The comps are resampled with
+ * replacement (200 resamples, seeded), the log-log fit is refit each time, every board
+ * row is rescored (launch value from the refit, same token odds), and ranks are recorded.
+ * Returns, per slug, the 10th and 90th percentile rank, plus the bootstrap distribution
+ * of the fitted slope and intercept. The point ranking never changes: this only measures
+ * how stable it is.
+ */
+function bootstrapRankRanges(
+  snapshot: Snapshot,
+  scored: Array<{ p: SnapshotProtocol; odds: number }>,
+  model: ModelConstants,
+): { ranges: Map<string, { lo: number; hi: number }>; slopeLo: number; slopeHi: number; interceptLo: number; interceptHi: number } {
+  const comps = snapshot.protocols
+    .filter((p) => p.mcap_usd !== null && p.mcap_usd > 0)
+    .map((p) => [Math.log(Math.max(1, p.tvl_usd)), Math.log(p.mcap_usd!)] as [number, number])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const ranksBySlug = new Map<string, number[]>();
+  for (const s of scored) ranksBySlug.set(s.p.slug, []);
+  const slopes: number[] = [];
+  const intercepts: number[] = [];
+  const rng = mulberry32(20261114);
+  const RESAMPLES = 200;
+  for (let b = 0; b < RESAMPLES; b++) {
+    const sample: Array<[number, number]> = [];
+    for (let i = 0; i < comps.length; i++) sample.push(comps[Math.floor(rng() * comps.length)]!);
+    const fit = olsLogLog(sample);
+    slopes.push(fit.slope);
+    intercepts.push(fit.intercept);
+    const rescored = scored
+      .map((s) => ({ slug: s.p.slug, value: Math.exp(fit.intercept + fit.slope * Math.log(Math.max(1, s.p.tvl_usd))) * s.odds }))
+      .sort((a, z) => z.value - a.value || (a.slug < z.slug ? -1 : a.slug > z.slug ? 1 : 0));
+    rescored.forEach((r, i) => ranksBySlug.get(r.slug)!.push(i + 1));
+  }
+  slopes.sort((a, z) => a - z);
+  intercepts.sort((a, z) => a - z);
+  const ranges = new Map<string, { lo: number; hi: number }>();
+  for (const [slug, ranks] of ranksBySlug) {
+    ranks.sort((a, z) => a - z);
+    ranges.set(slug, { lo: quantileSorted(ranks, 0.1), hi: quantileSorted(ranks, 0.9) });
+  }
+  return {
+    ranges,
+    slopeLo: quantileSorted(slopes, 0.1),
+    slopeHi: quantileSorted(slopes, 0.9),
+    interceptLo: quantileSorted(intercepts, 0.1),
+    interceptHi: quantileSorted(intercepts, 0.9),
+  };
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const index = bySlug(snapshot.protocols);
@@ -527,12 +715,22 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   // so the ranking is a ranking, not a tie, and no value is invented: a collided row
   // keeps the lower of its rounded value and one dollar below the row above it.
   let prev = Number.POSITIVE_INFINITY;
+  const boot = bootstrapRankRanges(
+    snapshot,
+    scored.map((s) => ({ p: s.p, odds: s.v.odds })),
+    model,
+  );
   const rows = scored.map((s, i) => {
     let implied = s.v.implied;
     if (implied >= prev) implied = prev - 1;
     if (implied < 1) implied = 1;
     prev = implied;
     const steps = farmSteps(s.p, s.v.age, s.econ).map(stepText);
+    const rawRange = boot.ranges.get(s.p.slug) ?? { lo: i + 1, hi: i + 1 };
+    // Two rows can be so close in value that the point rank sits outside the
+    // bootstrap 10th-90th range (the refits usually order them the other way).
+    // The range is a stability statement about the point rank, so it contains it.
+    const range = { lo: Math.min(rawRange.lo, i + 1), hi: Math.max(rawRange.hi, i + 1) };
     return {
       rank: i + 1,
       slug: s.p.slug,
@@ -552,6 +750,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       token_odds: Math.round(s.v.odds * 1000000) / 1000000,
       implied_lo_usd: s.v.lo,
       implied_hi_usd: s.v.hi,
+      rank_lo: range.lo,
+      rank_hi: range.hi,
       model: {
         log_tvl: Math.round(Math.log(Math.max(1, s.p.tvl_usd)) * 10000) / 10000,
         pred_log_mcap: Math.round(s.v.predLog * 10000) / 10000,
@@ -563,6 +763,37 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     };
   });
   return rows;
+}
+
+/** The board plus the bootstrap distribution behind its rank ranges. */
+export function buildBoardWithBootstrap(
+  snapshot: Snapshot,
+  model: ModelConstants = MODEL,
+): {
+  board: BoardRow[];
+  bootstrap: { resamples: number; slopeLo: number; slopeHi: number; interceptLo: number; interceptHi: number };
+} {
+  const board = buildBoard(snapshot, model);
+  // Recompute the bootstrap once for the dashboard's slope/intercept interval. It is
+  // seeded and deterministic, so it agrees with the rank ranges buildBoard computed.
+  const boot = bootstrapRankRanges(
+    snapshot,
+    board.map((r) => ({
+      p: snapshot.protocols.find((p) => p.slug === r.slug)!,
+      odds: r.token_odds,
+    })),
+    model,
+  );
+  return {
+    board,
+    bootstrap: {
+      resamples: 200,
+      slopeLo: Math.round(boot.slopeLo * 1000) / 1000,
+      slopeHi: Math.round(boot.slopeHi * 1000) / 1000,
+      interceptLo: Math.round(boot.interceptLo * 100) / 100,
+      interceptHi: Math.round(boot.interceptHi * 100) / 100,
+    },
+  };
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -602,6 +833,8 @@ export function radarRow(row: BoardRow): RadarRow {
     token_odds: row.token_odds,
     implied_lo_usd: row.implied_lo_usd,
     implied_hi_usd: row.implied_hi_usd,
+    rank_lo: row.rank_lo,
+    rank_hi: row.rank_hi,
     growth_pct: row.model.growth_pct,
     farm: row.farm,
     farm_steps: row.farm_steps,
@@ -609,13 +842,41 @@ export function radarRow(row: BoardRow): RadarRow {
 }
 
 /** Everything the dashboard renders, from the snapshot. */
+/** First exclusion reason for a pre-token protocol, in the watchlist rule's order. */
+function exclusionReason(p: SnapshotProtocol): 'category' | 'versioned' | 'wrapped' | 'exchange' | null {
+  if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) return 'category';
+  if (VERSIONED.test(p.name)) return 'versioned';
+  const padded = ` ${p.name.toLowerCase()} `;
+  if (padded.includes(' wrapped ') || padded.includes(' staked ') || padded.includes(' staking ')) return 'wrapped';
+  for (const prefix of EXCHANGE_PREFIXES) if (p.name.startsWith(prefix)) return 'exchange';
+  return null;
+}
+
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
+  const { board, bootstrap } = buildBoardWithBootstrap(snapshot, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const traded = snapshot.protocols.filter((p) => p.symbol !== null).length;
   const preToken = snapshot.protocols.filter(isPreToken).length;
   const rankable = snapshot.protocols.filter(isRankable).length;
+  const watchlist = new Set(snapshot.watchlist);
+  let byCategory = 0;
+  let byVersioned = 0;
+  let byWrapped = 0;
+  let byExchange = 0;
+  for (const p of snapshot.protocols) {
+    if (!isPreToken(p) || isRankable(p)) continue;
+    const reason = exclusionReason(p);
+    if (reason === 'category') byCategory++;
+    else if (reason === 'versioned') byVersioned++;
+    else if (reason === 'wrapped') byWrapped++;
+    else if (reason === 'exchange') byExchange++;
+  }
+  const aboveFloorNotWatchlist = snapshot.protocols.filter(
+    (p) => isRankable(p) && p.tvl_usd >= snapshot.floor_usd && !watchlist.has(p.slug),
+  ).length;
+  const farmCounts = { FARM: 0, THIN: 0, SKIP: 0 };
+  for (const r of board) farmCounts[r.farm.verdict]++;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -633,7 +894,14 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
       rankable,
       excluded: preToken - rankable,
       comps_mcap: snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0).length,
+      excluded_by_category: byCategory,
+      excluded_by_versioned: byVersioned,
+      excluded_by_wrapped: byWrapped,
+      excluded_by_exchange: byExchange,
+      above_floor_not_watchlist: aboveFloorNotWatchlist,
     },
+    farm_counts: farmCounts,
+    bootstrap,
     rows: board.map(radarRow),
     live,
   };
