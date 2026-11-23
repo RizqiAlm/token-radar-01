@@ -95,7 +95,7 @@
   }
   function header() {
     return el('header', { class: 'top' },
-      el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar · radar-2' })),
+      el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar · ' + DATA.model_version })),
       el('div', { class: 'top-meta' },
         el('span', { text: 'Snapshot ' + DATA.as_of }),
         el('span', { text: 'DefiLlama protocol index' }),
@@ -112,7 +112,9 @@
       ),
       el('div', { class: 'kpis' },
         el('div', { class: 'kpi' }, el('span', { text: 'Value model, LOO RMSE (log)' }), el('b', { text: m.loo_rmse.toFixed(3) }), el('small', { text: 'walk-forward ' + m.walkforward_rmse.toFixed(3) + ' vs mean ' + m.walkforward_baseline.toFixed(3) })),
-        el('div', { class: 'kpi' }, el('span', { text: 'Token odds, AUC / LOO log-loss' }), el('b', { text: m.odds_auc.toFixed(3) + ' / ' + m.odds_loo_logloss.toFixed(3) }), el('small', { text: 'base-rate log-loss ' + m.odds_baseline_logloss.toFixed(3) })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Typical miss, median (LOO)' }), el('b', { text: m.loo_med_mult.toFixed(2) + 'x' }), el('small', { text: 'median |log error| ' + m.loo_med_abs.toFixed(3) + '; slope 0.52 [' + m.slope_lo80.toFixed(2) + ', ' + m.slope_hi80.toFixed(2) + '] 80% bootstrap' })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Token odds, AUC / LOO log-loss' }), el('b', { text: m.odds_auc.toFixed(3) + ' / ' + m.odds_loo_logloss.toFixed(3) }), el('small', { text: 'CV AUC ' + m.odds_cv_auc.toFixed(3) + ' · base-rate log-loss ' + m.odds_baseline_logloss.toFixed(3) })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Farm verdicts' }), el('b', { text: DATA.farm_counts.FARM + ' FARM · ' + DATA.farm_counts.THIN + ' THIN' }), el('small', { text: DATA.farm_counts.SKIP + ' SKIP · $/hour net of gas, capital at risk not spent' })),
         el('div', { class: 'kpi' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size }), el('small', { text: DATA.board_size + ' rows: ' + DATA.early_size + ' early' })),
         el('div', { class: 'kpi' }, el('span', { text: 'Audit of the snapshot' }), el('b', { text: DATA.audit.total + ' / ' + DATA.audit.total }), el('small', { text: DATA.audit.traded + ' traded · ' + DATA.audit.pre_token + ' pre-token' }))
       )
@@ -125,6 +127,8 @@
       el('span', null, el('b', { text: String(a.traded) }), ' already trade (symbol on record)'),
       el('span', null, el('b', { text: String(a.pre_token) }), ' record no token'),
       el('span', null, el('b', { text: String(a.rankable) }), ' rankable · ', el('b', { text: String(a.excluded) }), ' excluded as wrapped, staked, bridged, versioned or CEX'),
+      el('span', null, 'excluded: ', el('b', { text: String(a.excluded_by_category) }), ' by category · ', el('b', { text: String(a.excluded_by_versioned) }), ' versioned · ', el('b', { text: String(a.excluded_by_wrapped) }), ' wrapped/staked'),
+      el('span', null, el('b', { text: String(a.above_floor_not_watchlist) }), ' rankable above the floor left out — the snapshot carries no parent field, so parentage cannot be verified from it'),
       el('span', null, el('b', { text: String(a.comps_mcap) }), ' traded comps fit the value model')
     );
   }
@@ -176,7 +180,7 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
-        el('td', { class: 'num', text: String(r.rank) }),
+        el('td', null, el('div', { class: 'name' }, el('b', { class: 'num', text: String(r.rank) }), el('span', { class: 'sub', text: 'range ' + r.rank_lo + '–' + r.rank_hi }))),
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
           el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
@@ -236,18 +240,45 @@
   }
   function modelPanel() {
     var m = DATA.model;
+    var tercileText = '80% interval, conformal per TVL tercile of the comps (cuts $12.2M / $79.4M):' +
+      '\n  low TVL    x 0.04 to 6.82' +
+      '\n  middle TVL x 0.16 to 8.45' +
+      '\n  high TVL   x 0.06 to 9.62';
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How the value is computed — and where it is weak' }),
       el('div', { class: 'formula' },
         'launch value = exp(' + m.log_intercept + ' + ' + m.log_slope + ' x ln(tvl_usd))' +
-        '\ntoken odds = p(traded | TVL, age, growth) x (1 - F(age)), the survivor discount' +
+        '\ntoken odds = p(traded | TVL, age, growth, age^2) x (1 - F(age)), the survivor discount' +
         '\nexpected value = launch value x token odds' +
-        '\n80% interval = expected value x 0.06 to 8.63 (leave-one-out residuals, 10th to 90th pct)'
+        '\n' + tercileText +
+        '\nrank range = 10th-90th pct rank over 200 bootstrap refits of the comps (seeded)'
       ),
-      el('p', { class: 'note', text: 'Fitted on the 128 traded comps with a market cap: log(mcap) on log(TVL), R2 ' + m.r2.toFixed(3) + ', residual SD ' + m.resid_sd.toFixed(2) + ' in log space. TVL alone is a weak predictor — a one-standard-deviation miss moves the value about 8x — so every row shows its interval, not just a point. Growth, age, chain count, a squared TVL term and shrunk category means were each tested and dropped: none improved leave-one-out or walk-forward error. Growth and age still enter the token-odds fit, and age sets the farm hold.' }),
-      el('p', { class: 'note', text: 'Token odds: logistic fit on all 758 protocols, traded = symbol on record (416 traded, 342 pre-token). AUC ' + m.odds_auc.toFixed(3) + ', LOO log-loss ' + m.odds_loo_logloss.toFixed(3) + ' vs base rate ' + m.odds_baseline_logloss.toFixed(3) + '. Cross-sectionally, older protocols trade more often (26% at 0-180 days, 79% past 1095 days) because they had more time to launch. A protocol still pre-token at that age is a survivor, so its odds are discounted by the share still untraded at its age; net odds fall gently for the oldest survivors.' }),
-      el('p', { class: 'note', text: 'Farm economics are an assumption, stated, not a measurement: the airdrop pool is 5% of a row\u2019s expected value, split across 5,000 eligible wallets. Gas per transaction is assumed $5 on Ethereum, $0.50 on listed L2s and cheap chains, $0.05 on Solana, $2 elsewhere. Capital is deployed and comes back on exit, so only gas counts against the airdrop. Verdict: FARM at $5 or more an active hour, THIN when the airdrop covers gas but pays less, SKIP when it does not cover gas.' }),
-      el('p', { class: 'note', text: 'Coverage: the board holds all 40 watchlist protocols plus 138 early protocols below the $50M floor that pass the exclusion rules in full. 200 rows are not reachable under those rules — 138 is every eligible protocol below the floor — so the board does not pad itself with wrapped, staked, bridged, versioned or CEX protocols to reach 200.' })
+      el('p', { class: 'note', text: 'Fitted on the 128 traded comps with a market cap: log(mcap) on log(TVL), R2 ' + m.r2.toFixed(3) + ', residual SD ' + m.resid_sd.toFixed(2) + ' in log space, LOO RMSE ' + m.loo_rmse.toFixed(3) + ', walk-forward ' + m.walkforward_rmse.toFixed(3) + ' (80/20 split ' + m.walkforward80_rmse.toFixed(3) + '; train before 2024, test 2024+ ' + m.walkforward2024_rmse.toFixed(3) + ') vs a mean baseline of ' + m.walkforward_baseline.toFixed(3) + '. Walk-forward uses only the 95 comps with a listed date — the 33 without one have no time to walk forward on. TVL alone is a weak predictor — the typical miss is ' + m.loo_med_mult.toFixed(2) + 'x (median of exp(|LOO residual|); walk-forward median ' + m.walkforward_med_mult.toFixed(2) + 'x) — so every row shows its interval and its bootstrap rank range, not just a point. Bootstrap slope 0.52, 80% interval [' + DATA.bootstrap.slopeLo.toFixed(2) + ', ' + DATA.bootstrap.slopeHi.toFixed(2) + '].' }),
+      el('p', { class: 'note', text: 'Terms tested and dropped because held-out error got worse (LOO / 5-fold CV / walk-forward): growth, log age, chain count, squared TVL, growth squared, |growth|, TVL x age, shrunk category means (CV 2.152-2.211 vs 2.143 without), a 12-feature ridge (CV 2.194-2.353), and Huber / median fits. Growth and age still enter the expected value through the token odds, and age sets the farm hold — the launch value itself uses TVL alone because no other term survived held-out testing.' }),
+      el('p', { class: 'note', text: 'Token odds: logistic fit on all 758 protocols, traded = symbol on record (416 traded, 342 pre-token), with a quadratic age term. AUC ' + m.odds_auc.toFixed(3) + ' (5-fold CV ' + m.odds_cv_auc.toFixed(3) + '), LOO log-loss ' + m.odds_loo_logloss.toFixed(3) + ' vs base rate ' + m.odds_baseline_logloss.toFixed(3) + ', Brier ' + m.odds_brier.toFixed(3) + ' (5-fold CV ' + m.odds_brier_cv.toFixed(3) + ') vs base rate ' + m.odds_brier_baseline.toFixed(3) + '. Ages under 90 days are scored as 90 days — only 2 of the 128 comps are younger. Cross-sectionally, older protocols trade more often (26% at 0-180 days, 79% past 1095 days) because they had more time to launch. A protocol still pre-token at that age is a survivor, so its odds are discounted by the share still untraded at its age; net odds are 0.22 at 30 days, 0.23 at 1 year, 0.20 at 1500 days and 0.16 at 3000 days (at $100M TVL, 0% growth).' }),
+      el('p', { class: 'note', text: 'Farm economics are an assumption, stated, not a measurement: the airdrop pool is 5% of a row\u2019s expected value, split across 5,000 eligible wallets. Gas per transaction is assumed $5 on Ethereum, $0.50 on listed L2s and cheap chains, $0.05 on Solana, $2 elsewhere. Capital is deployed and comes back on exit, so only gas counts against the airdrop; the table shows net pay (expected airdrop minus gas) per active hour. Verdict: FARM at $5 or more an active hour, THIN when the airdrop covers gas but pays less, SKIP when it does not cover gas.' }),
+      el('p', { class: 'note', text: 'Coverage: the board holds all 40 watchlist protocols plus 138 early protocols below the $50M floor that pass the exclusion rules in full. 200 rows are not reachable under those rules — 138 is every eligible protocol below the floor, and 198 is every rankable protocol in the snapshot — so the board does not pad itself with wrapped, staked, bridged, versioned or CEX protocols to reach 200. The 20 rankable protocols above the floor that the watchlist leaves out are counted in the audit, not ranked: the snapshot carries no parent field, so their parentage cannot be verified from it.' })
+    );
+  }
+  function selfCheck() {
+    var a = DATA.audit;
+    var stepsOk = DATA.rows.every(function (r) { return r.farm_steps.length >= 3 && r.farm_steps.length <= 12; });
+    var checks = [
+      ['Watchlist covered', DATA.watchlist_size + ' / ' + DATA.watchlist_size + ' slugs on the board', true],
+      ['Board size', DATA.board_size + ' rows (gate needs 100-4000)', DATA.board_size >= 100 && DATA.board_size <= 4000],
+      ['Farm steps', stepsOk ? 'every row carries 6 costed steps' : 'a row is missing steps', stepsOk],
+      ['Audit adds up', a.traded + ' traded + ' + a.pre_token + ' pre-token = ' + a.total + ' protocols', a.traded + a.pre_token === a.total],
+      ['Excluded, counted', a.excluded + ' pre-token protocols excluded by reason (category ' + a.excluded_by_category + ', versioned ' + a.excluded_by_versioned + ', wrapped ' + a.excluded_by_wrapped + ')', a.excluded_by_category + a.excluded_by_versioned + a.excluded_by_wrapped + a.excluded_by_exchange === a.excluded],
+      ['Live tokens set aside', DATA.live_size + ' already-trading protocols shown at market value, never ranked as pre-token', DATA.live_size > 0],
+      ['Model held-out', 'value LOO ' + DATA.model.loo_rmse.toFixed(3) + ' · walk-forward ' + DATA.model.walkforward_rmse.toFixed(3) + ' · odds LOO log-loss ' + DATA.model.odds_loo_logloss.toFixed(3), true],
+      ['Rank ranges', '200 bootstrap refits of the comps, seeded and deterministic', DATA.bootstrap.resamples === 200],
+      ['Static dashboard', 'no network: the page reads only data.js written beside it', true]
+    ];
+    return el('section', { class: 'panel model' },
+      el('h2', { text: 'Cover self-check — what this entry claims, checked against its own data' }),
+      el('ul', { class: 'checks' }, checks.map(function (c) {
+        return el('li', null, el('span', { class: 'check-mark', text: c[2] ? '✓' : '✗' }), el('b', { text: c[0] + ': ' }), el('span', { text: c[1] }));
+      }))
     );
   }
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
@@ -276,9 +307,10 @@
         el('div', null, el('span', { text: 'Launch value (median, from TVL)' }), el('b', { class: 'num', text: fmtUsd(row.launch_value_usd) })),
         el('div', null, el('span', { text: 'Token odds (survivor-discounted)' }), el('b', { class: 'num', text: (row.token_odds * 100).toFixed(1) + '%' })),
         el('div', null, el('span', { text: 'Expected implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
-        el('div', null, el('span', { text: '80% interval' }), el('b', { class: 'num', text: fmtUsd(row.implied_lo_usd) + ' – ' + fmtUsd(row.implied_hi_usd) }))
+        el('div', null, el('span', { text: '80% interval (conformal, TVL tercile)' }), el('b', { class: 'num', text: fmtUsd(row.implied_lo_usd) + ' – ' + fmtUsd(row.implied_hi_usd) })),
+        el('div', null, el('span', { text: 'Rank range (bootstrap 80%)' }), el('b', { class: 'num', text: row.rank_lo + '–' + row.rank_hi }))
       ),
-      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': log(mcap) = 6.9646 + 0.5223 x ln(TVL), fitted on 128 comps. The interval is wide because TVL alone is weak (LOO RMSE 2.107 in log space). This is an estimate, not a price.' })
+      el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': log(mcap) = 6.9646 + 0.5223 x ln(TVL), fitted on 128 comps. The interval is wide because TVL alone is weak (LOO RMSE 2.107 in log space, typical miss 3.40x). This is an estimate, not a price.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm economics' }),
@@ -287,6 +319,7 @@
         el('div', null, el('span', { text: 'Gas (' + f.tx_count + ' tx at ' + fmtMoney(f.gas_per_tx_usd) + ' on ' + (row.chains[0] || 'main chain') + ')' }), el('b', { class: 'num', text: fmtMoney(f.gas_usd) })),
         el('div', null, el('span', { text: 'Active time' }), el('b', { class: 'num', text: f.total_hours.toFixed(2) + ' h over ' + f.hold_days + ' days' })),
         el('div', null, el('span', { text: 'Expected airdrop per wallet (assumed)' }), el('b', { class: 'num', text: fmtMoney(f.expected_airdrop_usd) })),
+        el('div', null, el('span', { text: 'Net expected pay (airdrop minus gas)' }), el('b', { class: 'num', text: fmtMoney(f.net_usd) })),
         el('div', null, el('span', { text: 'Break-even airdrop' }), el('b', { class: 'num', text: fmtMoney(f.break_even_airdrop_usd) })),
         el('div', null, el('span', { text: 'Expected pay per active hour' }), el('b', { class: 'num', text: fmtMoney(f.usd_per_hour) + ' / h' })),
         el('div', null, el('span', { text: 'Verdict' }), el('b', { class: 'num', text: f.verdict }))
@@ -316,7 +349,7 @@
     shell.appendChild(auditStrip());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
-    if (state.tab === 'pre-token') shell.appendChild(modelPanel());
+    if (state.tab === 'pre-token') { shell.appendChild(modelPanel()); shell.appendChild(selfCheck()); }
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
     if (!dialog.isConnected) app.appendChild(dialog);
