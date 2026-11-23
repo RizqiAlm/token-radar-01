@@ -9,12 +9,17 @@ Token Radar ranks 178 pre-token protocols by expected implied value, with token 
 ## Model
 
 - Value: log(mcap) = 6.9646 + 0.5223 x ln(TVL), fitted on the 128 traded comps
-  (R2 0.194, LOO RMSE 2.107, walk-forward RMSE 2.439 vs mean 2.728). TVL alone is
-  weak; growth, age, chain count, squared TVL and shrunk category means were tested
-  and dropped for worsening held-out error. Every row carries its 80% interval.
+  (R2 0.194, LOO RMSE 2.107, walk-forward RMSE 2.305 on dated comps only vs mean
+  2.728, typical miss 3.40x). TVL alone is weak; growth, age, chain count,
+  squared TVL, shrunk category means, a 12-feature ridge and Huber/median fits
+  were tested and dropped for worsening held-out error. Every row carries its
+  80% interval, conformal per TVL tercile, and a bootstrap rank range (200
+  refits, seeded).
 - Token odds: logistic fit on all 758 protocols (traded = symbol on record),
-  AUC 0.645, LOO log-loss 0.661 vs base rate 0.688, discounted by the share still
-  untraded at the protocol's age (survivor discount).
+  with a quadratic age term, AUC 0.649 (5-fold CV 0.642), LOO log-loss 0.653 vs
+  base rate 0.688, Brier 0.228 (CV 0.230) vs base rate 0.248, discounted by the
+  share still untraded at the protocol's age (survivor discount). Ages under 90
+  days are scored as 90 days.
 - Expected value = launch value x token odds. Farm plans are costed per chain
   with stated assumptions (airdrop pool 5% of expected value across 5,000
   wallets; gas $5 Ethereum, $0.50 L2s, $0.05 Solana, $2 elsewhere).
